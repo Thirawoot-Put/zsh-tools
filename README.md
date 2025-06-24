@@ -16,7 +16,7 @@ brew install fzf jq kubectl kubectx fd
 
 ```bash
 # clone this repository
-git clone https://github.com/Thirawoot-Put/zsh-tools
+git clone https://github.com/Thirawoot-Put/zsh-tools.git ~/zsh-tools
 cd zsh-tools && ./install.sh
 source ~/.zshrc
 ```
