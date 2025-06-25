@@ -1,4 +1,4 @@
-cdz() {
+cdf() {
   local show_hidden=false
   local arg1="$1"
 
