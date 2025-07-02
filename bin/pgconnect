@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euo pipefail
+
+ENV_DIR="$HOME/zsh-tools/env/pgconnect"
+source $ENV_DIR/.env
+
+DB_NAME=$(printf "%s\n" "${DB_LIST[@]}" | fzf --header="Select database" --header-border=double)
+echo "select database $DB_NAME"
+sleep 0.5
+
+SELECT_ENV_FILE=$(printf "%s\n" "${ENV_LIST[@]}" | fzf --header="Select database" --header-border=double)
+
+IFS="-" read -ra envs <<< "$SELECT_ENV_FILE"
+SELECT_ENV_FILE=".env"
+for i in "${envs[@]}"; do
+ SELECT_ENV_FILE=$(printf "%s.%s\n" $SELECT_ENV_FILE $i)
+done
+
+echo "select environment $SELECT_ENV_FILE"
+sleep 0.5
+
+if [ ! -f "$ENV_DIR/$SELECT_ENV_FILE" ]; then
+  echo "file $ENV_DIR/$SELECT_ENV_FILE not found"
+  exit 1
+fi
+
+source $ENV_DIR/$SELECT_ENV_FILE > /dev/null 2>&1
+echo "source $ENV_DIR/$SELECT_ENV_FILE done"
+sleep 0.5
+
+PGPASSWORD=$DB_PASSWORD pgcli -h localhost -p $DB_PORT -U $DB_USER $DB_NAME
