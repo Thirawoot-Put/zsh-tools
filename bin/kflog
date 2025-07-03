@@ -1,0 +1,144 @@
+#!/bin/bash
+set -euo pipefail
+
+# ------------- variables -------------
+TAIL_LINES=0
+DEFAULT_TAIL_LINES=500
+IS_LIVE_TAIL=false
+
+# ------------- functions -------------
+# fzfx is a wrapper for fzf with header and header-border
+fzfx() {
+  fzf --header="$1" --header-border=double
+}
+
+# download_logs downloads logs from a pod and saves them to a file
+download_logs() {
+  DIR=$HOME/Documents/inbox/k8s-logs
+  mkdir -p $DIR
+  FILENAME="$PODNAME-$(date +%Y%m%d-%H%M%S).log"
+  
+  echo "Saving logs to $DIR/$FILENAME"
+  
+  # Download logs from the pod base on the tail lines
+  if [[ $TAIL_LINES -gt 0 ]]; then
+    kubectl logs $PODNAME -n $NAMESPACE --tail $TAIL_LINES > "$DIR/$FILENAME"
+  else
+    kubectl logs $PODNAME -n $NAMESPACE > "$DIR/$FILENAME"
+  fi
+
+  echo "Downloaded logs to $DIR/$FILENAME"
+
+  read -p "Open logs in viewer? [Y/n] " choice # Ask for confirmation to open logs in a viewer
+  
+  if [[ $choice =~ ^[Nn]$ ]]; then
+    exit 0
+  else 
+      viewer=$(printf "plain\nbat\nnvim\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+      case "$viewer" in
+        plain)
+          cat "$DIR/$FILENAME"
+          ;;
+        bat)
+          bat "$DIR/$FILENAME"
+          ;;
+        lnav)
+          lnav "$DIR/$FILENAME"
+          ;;
+        nvim)
+          nvim "$DIR/$FILENAME"
+          ;;
+        quit)
+          exit 0
+          ;;
+        *)
+          echo "Invalid choice"
+          exit 1
+          ;;
+      esac
+  fi
+}
+
+live_logs() {
+  tmpfile=$(mktemp /tmp/k8slog.xxxxx.log) # Create a temporary file to store the logs
+
+  kubectl logs --follow --tail $TAIL_LINES $PODNAME -n $NAMESPACE > "$tmpfile" & pid=$! # Run kubectl logs in the background into the temporary file
+  trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
+
+  viewer=$(printf "plain\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+  case "$viewer" in
+    plain)
+      tail -f "$tmpfile" | cat
+      ;;
+    lnav)
+      lnav "$tmpfile"
+      ;;
+    quit)
+      exit 0
+      ;;
+    *)
+      echo "Invalid choice"
+      exit 1
+      ;;
+  esac
+  
+}
+# -------------------------------------
+
+# --------------- main ----------------
+# Check floag and set variables
+while [[  $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+        echo "Usage: $(basename "$0") [options]"
+        echo "Default: If no options are specified, the logs will be downloaded"
+        echo "Options:"
+        echo "  -h, --help      Show this help message and exit"
+        echo "  -f, --follow    Follow the logs live"
+        echo "  -t, --tail      Tail the logs"
+        echo "                  If not specified in live tail mode,"
+        echo "                  the default tail lines is $DEFAULT_TAIL_LINES"
+        echo "                  You can specify a number of lines to tail"
+        echo "                  e.g. $(basename "$0") -t 100"
+      exit 0
+      ;;
+    -f|--follow)
+      IS_LIVE_TAIL=true
+
+      if ! [[ -n $2 ]]; then
+        TAIL_LINES=$DEFAULT_TAIL_LINES
+      fi
+
+      shift
+      ;;
+    -t|--tail)
+      if ! [[ -n $2 && "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: --tail requires a number value." >&2
+        exit 1
+      fi
+
+      TAIL_LINES=$2
+      shift 2
+      ;;
+    *)
+      echo "Unknown option $1"
+      break 
+      ;;
+  esac
+done
+
+kubectx | fzfx "Choose a cluster" # Choose cluster
+PODINFO=$(kubectl get pods -A | fzfx "Choose a pod") # Choose pod
+
+IFS=' ' read -r -a POD <<< "$PODINFO" # Split the pod info into an array
+
+NAMESPACE=${POD[0]}
+PODNAME=${POD[1]}
+
+echo "Choose pod: $PODNAME, namespace: $NAMESPACE"
+
+if [[ $IS_LIVE_TAIL == true ]]; then
+  live_logs
+else
+  download_logs
+fi
