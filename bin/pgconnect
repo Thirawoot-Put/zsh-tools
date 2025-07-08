@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-ENV_DIR="$HOME/zsh-tools/env/pgconnect"
+ENV_DIR="$HOME/zsh-tools/envs/pgconnect"
 source $ENV_DIR/.env
 
 DB_NAME=$(printf "%s\n" "${DB_LIST[@]}" | fzf --header="Select database" --header-border=double)
