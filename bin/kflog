@@ -5,6 +5,7 @@ set -euo pipefail
 TAIL_LINES=0
 DEFAULT_TAIL_LINES=500
 IS_LIVE_TAIL=false
+IS_VIEW_LOG=false
 
 # ------------- functions -------------
 # fzfx is a wrapper for fzf with header and header-border
@@ -34,16 +35,13 @@ download_logs() {
   if [[ $choice =~ ^[Nn]$ ]]; then
     exit 0
   else 
-      viewer=$(printf "plain\nbat\nnvim\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+      viewer=$(printf "plain\nbat\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
       case "$viewer" in
         plain)
           cat "$DIR/$FILENAME"
           ;;
         bat)
           bat "$DIR/$FILENAME"
-          ;;
-        lnav)
-          lnav "$DIR/$FILENAME"
           ;;
         nvim)
           nvim "$DIR/$FILENAME"
@@ -81,7 +79,31 @@ live_logs() {
       exit 1
       ;;
   esac
-  
+}
+
+view_log() {
+  viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+  cmd="kubectl logs $PODNAME -n $NAMESPACE"
+
+  if [[ $TAIL_LINES -gt 0 ]]; then
+    cmd="$cmd --tail $TAIL_LINES"
+  fi
+
+  case "$viewer" in
+    plain)
+      eval "$cmd" | cat
+      ;;
+    bat)
+      eval "$cmd" | bat
+      ;;
+    quit)
+      exit 0
+      ;;
+    *)
+      echo "Invalid choice"
+      exit 1
+      ;;
+  esac
 }
 # -------------------------------------
 
@@ -95,6 +117,7 @@ while [[  $# -gt 0 ]]; do
         echo "Options:"
         echo "  -h, --help      Show this help message and exit"
         echo "  -f, --follow    Follow the logs live"
+        echo "  -v, --view      View the logs"
         echo "  -t, --tail      Tail the logs"
         echo "                  If not specified in live tail mode,"
         echo "                  the default tail lines is $DEFAULT_TAIL_LINES"
@@ -120,6 +143,10 @@ while [[  $# -gt 0 ]]; do
       TAIL_LINES=$2
       shift 2
       ;;
+    -v|--view)
+      IS_VIEW_LOG=true
+      shift
+      ;;
     *)
       echo "Unknown option $1"
       break 
@@ -139,6 +166,8 @@ echo "Choose pod: $PODNAME, namespace: $NAMESPACE"
 
 if [[ $IS_LIVE_TAIL == true ]]; then
   live_logs
+elif [[ $IS_VIEW_LOG == true ]]; then
+  view_log
 else
   download_logs
 fi
