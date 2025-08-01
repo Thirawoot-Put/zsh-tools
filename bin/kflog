@@ -11,201 +11,203 @@ IS_CHOOSE_FILE=false
 # ------------- functions -------------
 # fzfx is a wrapper for fzf with header and header-border
 fzfx() {
-  fzf --header="$1" --header-border=double
+	fzf --header="$1" --header-border=double
 }
 
 # Downloads logs from a pod, saves them to a file, and opens the file in a viewer
 download_logs() {
-  # LOG_DIR=$HOME/Documents/inbox/k8s-logs
-  source $HOME/zsh-tools/envs/kflog/.env
+	# LOG_DIR=$HOME/Documents/inbox/k8s-logs
+	source $HOME/zsh-tools/envs/kflog/.env
 
-  mkdir -p $LOG_DIR
-  FILENAME="$PODNAME-$(date +%Y%m%d-%H%M%S).log"
-  
-  echo "Saving logs to $LOG_DIR/$FILENAME"
-  
-  # Download logs from the pod base on the tail lines
-  if [[ $TAIL_LINES -gt 0 ]]; then
-    kubectl logs $PODNAME -n $NAMESPACE --tail $TAIL_LINES > "$LOG_DIR/$FILENAME"
-  else
-    kubectl logs $PODNAME -n $NAMESPACE > "$LOG_DIR/$FILENAME"
-  fi
+	mkdir -p $LOG_DIR
+	FILENAME="$PODNAME-$(date +%Y%m%d-%H%M%S).log"
 
-  echo "Downloaded logs to $LOG_DIR/$FILENAME"
+	echo "Saving logs to $LOG_DIR/$FILENAME"
 
-  read -p "Open logs in viewer? [Y/n] " choice # Ask for confirmation to open logs in a viewer
-  
-  if [[ $choice =~ ^[Nn]$ ]]; then
-    exit 0
-  else 
-      viewer=$(printf "plain\nbat\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-      case "$viewer" in
-        plain)
-          cat "$LOG_DIR/$FILENAME"
-          ;;
-        bat)
-          bat "$LOG_DIR/$FILENAME"
-          ;;
-        nvim)
-          nvim "$LOG_DIR/$FILENAME"
-          ;;
-        quit)
-          exit 0
-          ;;
-        *)
-          echo "Invalid choice"
-          exit 1
-          ;;
-      esac
-  fi
+	# Download logs from the pod base on the tail lines
+	if [[ $TAIL_LINES -gt 0 ]]; then
+		kubectl logs $PODNAME -n $NAMESPACE --tail $TAIL_LINES >"$LOG_DIR/$FILENAME"
+	else
+		kubectl logs $PODNAME -n $NAMESPACE >"$LOG_DIR/$FILENAME"
+	fi
+
+	echo "Downloaded logs to $LOG_DIR/$FILENAME"
+
+	read -p "Open logs in viewer? [Y/n] " choice # Ask for confirmation to open logs in a viewer
+
+	if [[ $choice =~ ^[Nn]$ ]]; then
+		exit 0
+	else
+		viewer=$(printf "plain\nbat\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+		case "$viewer" in
+		plain)
+			cat "$LOG_DIR/$FILENAME"
+			;;
+		bat)
+			bat "$LOG_DIR/$FILENAME"
+			;;
+		nvim)
+			nvim "$LOG_DIR/$FILENAME"
+			;;
+		quit)
+			exit 0
+			;;
+		*)
+			echo "Invalid choice"
+			exit 1
+			;;
+		esac
+	fi
 }
 
 # Live tail logs
 live_logs() {
-  tmpfile=$(mktemp /tmp/k8slog.xxxxx.log) # Create a temporary file to store the logs
+	tmpfile=$(mktemp /tmp/k8slog.xxxxx.log) # Create a temporary file to store the logs
 
-  kubectl logs --follow --tail $TAIL_LINES $PODNAME -n $NAMESPACE > "$tmpfile" & pid=$! # Run kubectl logs in the background into the temporary file
-  trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
+	kubectl logs --follow --tail $TAIL_LINES $PODNAME -n $NAMESPACE >"$tmpfile" &
+	pid=$!                                            # Run kubectl logs in the background into the temporary file
+	trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
 
-  viewer=$(printf "plain\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-  case "$viewer" in
-    plain)
-      tail -f "$tmpfile" | cat
-      ;;
-    lnav)
-      lnav "$tmpfile"
-      ;;
-    quit)
-      exit 0
-      ;;
-    *)
-      echo "Invalid choice"
-      exit 1
-      ;;
-  esac
+	viewer=$(printf "plain\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+	case "$viewer" in
+	plain)
+		tail -f "$tmpfile" | cat
+		;;
+	lnav)
+		lnav "$tmpfile"
+		;;
+	quit)
+		exit 0
+		;;
+	*)
+		echo "Invalid choice"
+		exit 1
+		;;
+	esac
 }
 
 # View logs without downloading
 view_log() {
-  viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-  cmd="kubectl logs $PODNAME -n $NAMESPACE" # Build the command to run
+	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+	cmd="kubectl logs $PODNAME -n $NAMESPACE"                    # Build the command to run
 
-  if [[ $TAIL_LINES -gt 0 ]]; then
-    cmd="$cmd --tail $TAIL_LINES" # Add tail lines if specified
-  fi
+	if [[ $TAIL_LINES -gt 0 ]]; then
+		cmd="$cmd --tail $TAIL_LINES" # Add tail lines if specified
+	fi
 
-  case "$viewer" in
-    plain)
-      eval "$cmd" | cat
-      ;;
-    bat)
-      eval "$cmd" | bat
-      ;;
-    quit)
-      exit 0
-      ;;
-    *)
-      echo "Invalid choice"
-      exit 1
-      ;;
-  esac
+	case "$viewer" in
+	plain)
+		eval "$cmd" | cat
+		;;
+	bat)
+		eval "$cmd" | bat
+		;;
+	quit)
+		exit 0
+		;;
+	*)
+		echo "Invalid choice"
+		exit 1
+		;;
+	esac
 }
 
 # Choose a log file and open it in a viewer
 choose_log() {
-  # LOG_DIR=$HOME/Documents/inbox/k8s-logs
-  source $HOME/zsh-tools/envs/kflog/.env
+	# LOG_DIR=$HOME/Documents/inbox/k8s-logs
+	source $HOME/zsh-tools/envs/kflog/.env
 
-  FILENAME=$(ls "$LOG_DIR" | fzfx "Choose a log file")
+	FILENAME=$(ls "$LOG_DIR" | fzfx "Choose a log file")
 
-  viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-  case "$viewer" in
-    plain)
-      cat "$LOG_DIR/$FILENAME"
-      ;;
-    bat)
-      bat "$LOG_DIR/$FILENAME"
-      ;;
-    quit)
-      exit 0
-      ;;
-    *)
-      echo "Invalid choice"
-      exit 1
-      ;;
-  esac
+	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+	case "$viewer" in
+	plain)
+		cat "$LOG_DIR/$FILENAME"
+		;;
+	bat)
+		bat "$LOG_DIR/$FILENAME"
+		;;
+	quit)
+		exit 0
+		;;
+	*)
+		echo "Invalid choice"
+		exit 1
+		;;
+	esac
 }
 # -------------------------------------
 
 # --------------- main ----------------
 # Check floag and set variables
-while [[  $# -gt 0 ]]; do
-  case "$1" in
-    -h|--help)
-        echo "Usage: $(basename "$0") [options]"
-        echo "Default: If no options are specified, the logs will be downloaded"
-        echo "Options:"
-        echo "  -h, --help      Show this help message and exit"
-        echo "  -f, --follow    Follow the logs live"
-        echo "  -v, --view      View the logs"
-        echo "  -t, --tail      Tail the logs"
-        echo "                  If not specified in live tail mode,"
-        echo "                  the default tail lines is $DEFAULT_TAIL_LINES"
-        echo "                  You can specify a number of lines to tail"
-        echo "                  e.g. $(basename "$0") -t 100"
-      exit 0
-      ;;
-    -f|--follow)
-      IS_LIVE_TAIL=true
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-h | --help)
+		echo "Usage: $(basename "$0") [options]"
+		echo "Default: If no options are specified, the logs will be downloaded"
+		echo "Options:"
+		echo "  -h, --help              Show this help message and exit"
+		echo "  -f, --follow            Follow the logs live"
+		echo "  -v, --view              View the logs"
+		echo "  -t, --tail              Tail the logs"
+		echo "  -cf, --choose-file      Choose desire log file"
+		echo "                          If not specified in live tail mode,"
+		echo "                          the default tail lines is $DEFAULT_TAIL_LINES"
+		echo "                          You can specify a number of lines to tail"
+		echo "                          e.g. $(basename "$0") -t 100"
+		exit 0
+		;;
+	-f | --follow)
+		IS_LIVE_TAIL=true
 
-      if ! [[ -n $2 ]]; then
-        TAIL_LINES=$DEFAULT_TAIL_LINES
-      fi
+		if ! [[ -n $2 ]]; then
+			TAIL_LINES=$DEFAULT_TAIL_LINES
+		fi
 
-      shift
-      ;;
-    -t|--tail)
-      if ! [[ -n $2 && "$2" =~ ^[0-9]+$ ]]; then
-        echo "Error: --tail requires a number value." >&2
-        exit 1
-      fi
+		shift
+		;;
+	-t | --tail)
+		if ! [[ -n $2 && "$2" =~ ^[0-9]+$ ]]; then
+			echo "Error: --tail requires a number value." >&2
+			exit 1
+		fi
 
-      TAIL_LINES=$2
-      shift 2
-      ;;
-    -v|--view)
-      IS_VIEW_LOG=true
-      shift
-      ;;
-    -cf|--choose-file)
-      IS_CHOOSE_FILE=true
-      shift
-      ;;
-    *)
-      echo "Unknown option $1"
-      break 
-      ;;
-  esac
+		TAIL_LINES=$2
+		shift 2
+		;;
+	-v | --view)
+		IS_VIEW_LOG=true
+		shift
+		;;
+	-cf | --choose-file)
+		IS_CHOOSE_FILE=true
+		shift
+		;;
+	*)
+		echo "Unknown option $1"
+		break
+		;;
+	esac
 done
 
 if [[ $IS_CHOOSE_FILE == true ]]; then
-  choose_log
+	choose_log
 else
-  kubectx "$(kubectx | fzfx "Choose a cluster")" # Choose cluster
-  PODINFO=$(kubectl get pods -A | fzfx "Choose a pod") # Choose pod
-  
-  IFS=' ' read -r -a POD <<< "$PODINFO" # Split the pod info into an array
-  
-  NAMESPACE=${POD[0]}
-  PODNAME=${POD[1]}
-  
-  echo "Choose pod: $PODNAME, namespace: $NAMESPACE"
-  
-  if [[ $IS_LIVE_TAIL == true ]]; then
-    live_logs
-  elif [[ $IS_VIEW_LOG == true ]]; then
-    view_log
-  else
-    download_logs
-  fi
+	kubectx "$(kubectx | fzfx "Choose a cluster")"       # Choose cluster
+	PODINFO=$(kubectl get pods -A | fzfx "Choose a pod") # Choose pod
+
+	IFS=' ' read -r -a POD <<<"$PODINFO" # Split the pod info into an array
+
+	NAMESPACE=${POD[0]}
+	PODNAME=${POD[1]}
+
+	echo "Choose pod: $PODNAME, namespace: $NAMESPACE"
+
+	if [[ $IS_LIVE_TAIL == true ]]; then
+		live_logs
+	elif [[ $IS_VIEW_LOG == true ]]; then
+		view_log
+	else
+		download_logs
+	fi
 fi
