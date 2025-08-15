@@ -41,7 +41,7 @@ download_logs() {
 		viewer=$(printf "plain\nbat\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
 		case "$viewer" in
 		plain)
-			cat "$LOG_DIR/$FILENAME"
+			bat --style="plain" "$LOG_DIR/$FILENAME"
 			;;
 		bat)
 			bat "$LOG_DIR/$FILENAME"
@@ -100,7 +100,7 @@ view_log() {
 		eval "$cmd" | cat
 		;;
 	bat)
-		eval "$cmd" | bat
+		eval "$cmd" | bat --style="plain"
 		;;
 	quit)
 		exit 0
@@ -122,7 +122,7 @@ choose_log() {
 	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
 	case "$viewer" in
 	plain)
-		cat "$LOG_DIR/$FILENAME"
+		bat --style="plain" "$LOG_DIR/$FILENAME"
 		;;
 	bat)
 		bat "$LOG_DIR/$FILENAME"
