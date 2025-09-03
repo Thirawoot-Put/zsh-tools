@@ -2,11 +2,10 @@
 A collection of zsh tools both bin and functions
 
 ## Prerequisites
-- kubectl
-- kubectx
-- fzf
-- jq
-- fd
+- fzf - for kflog, pgconnect, cdf.zsh
+- kubectl - for kflog
+- kubectx - for kflog
+- fd - for cdf.zsh
 
 ## Installation
 ### Install prerequisites tools
