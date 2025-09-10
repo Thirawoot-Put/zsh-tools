@@ -62,11 +62,12 @@ download_logs() {
 
 # Live tail logs
 live_logs() {
-	tmpfile=$(mktemp /tmp/k8slog.xxxxx.log) # Create a temporary file to store the logs
+	tmpfile=$(mktemp /tmp/k8slog_"$(date +'%Y%m%d-%H%M%S')".log) # Create a temporary file to store the logs
 
 	kubectl logs --follow --tail $TAIL_LINES $PODNAME -n $NAMESPACE >"$tmpfile" &
-	pid=$!                                            # Run kubectl logs in the background into the temporary file
-	trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
+	pid=$! # Run kubectl logs in the background into the temporary file
+	# trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
+	trap 'echo "Signal caught, cleaning up..."; kill "$pid" 2>/dev/null; rm -f "$tmpfile"' INT TERM EXIT
 
 	viewer=$(printf "plain\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
 	case "$viewer" in
