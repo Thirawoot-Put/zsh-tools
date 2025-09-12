@@ -1,214 +1,477 @@
 #!/bin/bash
 set -euo pipefail
 
-# ------------- variables -------------
-TAIL_LINES=0
-DEFAULT_TAIL_LINES=500
-IS_LIVE_TAIL=false
-IS_VIEW_LOG=false
-IS_CHOOSE_FILE=false
+# ------------- Configuration -------------
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly DEFAULT_TAIL_LINES=500
+readonly TEMP_PREFIX="k8slog_$(date +'%Y%m%d-%H%M%S')"
 
-# ------------- functions -------------
-# fzfx is a wrapper for fzf with header and header-border
+# ------------- Global Variables -------------
+declare TAIL_LINES=0
+declare IS_LIVE_TAIL=false
+declare IS_VIEW_LOG=false
+declare IS_CHOOSE_FILE=false
+declare IS_NAMESPACE_LOGS=false
+declare TARGET_NAMESPACE=""
+declare LOG_DIR=""
+declare NAMESPACE=""
+declare SVCNAME=""
+
+# ------------- Utility Functions -------------
+log_info() {
+	echo "[INFO] $*" >&2
+}
+
+log_warn() {
+	echo "[WARN] $*" >&2
+}
+
+log_error() {
+	echo "[ERROR] $*" >&2
+}
+
+die() {
+	log_error "$*"
+	exit 1
+}
+
+# Enhanced fzf wrapper with better error handling
 fzfx() {
-	fzf --header="$1" --header-border=double
-}
+	local header="$1"
+	local input
 
-# Downloads logs from a service, saves them to a file, and opens the file in a viewer
-download_logs() {
-	# LOG_DIR=$HOME/Documents/inbox/k8s-logs
-	source $HOME/zsh-tools/envs/kflog/.env
-
-	mkdir -p $LOG_DIR
-	FILENAME="$SVCNAME-$(date +%Y%m%d-%H%M%S).log"
-
-	echo "Saving logs to $LOG_DIR/$FILENAME"
-
-	# Download logs from the pod base on the tail lines
-	if [[ $TAIL_LINES -gt 0 ]]; then
-		kubectl logs svc/$SVCNAME -n $NAMESPACE --tail $TAIL_LINES >"$LOG_DIR/$FILENAME"
-	else
-		kubectl logs svc/$SVCNAME -n $NAMESPACE >"$LOG_DIR/$FILENAME"
+	if ! input=$(fzf --header="$header" --header-border=double); then
+		die "Selection cancelled or no input provided"
 	fi
 
-	echo "Downloaded logs to $LOG_DIR/$FILENAME"
+	if [[ -z "$input" ]]; then
+		die "Empty selection"
+	fi
 
-	read -p "Open logs in viewer? [Y/n] " choice # Ask for confirmation to open logs in a viewer
+	echo "$input"
+}
 
-	if [[ $choice =~ ^[Nn]$ ]]; then
-		exit 0
-	else
-		viewer=$(printf "plain\nbat\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-		case "$viewer" in
-		plain)
-			bat --style="plain" "$LOG_DIR/$FILENAME"
-			;;
-		bat)
-			bat "$LOG_DIR/$FILENAME"
-			;;
-		nvim)
-			nvim "$LOG_DIR/$FILENAME"
-			;;
-		quit)
-			exit 0
-			;;
-		*)
-			echo "Invalid choice"
-			exit 1
-			;;
-		esac
+# Load environment configuration
+load_config() {
+	local env_file="$HOME/zsh-tools/envs/kflog/.env"
+
+	if [[ ! -f "$env_file" ]]; then
+		die "Configuration file not found: $env_file"
+	fi
+
+	# shellcheck source=/dev/null
+	source "$env_file"
+
+	if [[ -z "${LOG_DIR:-}" ]]; then
+		die "LOG_DIR not defined in configuration"
+	fi
+
+	mkdir -p "$LOG_DIR" || die "Failed to create log directory: $LOG_DIR"
+}
+
+# Validate kubectl and kubectx availability
+check_dependencies() {
+	local deps=("kubectl" "kubectx" "fzf")
+	local missing=()
+
+	for dep in "${deps[@]}"; do
+		if ! command -v "$dep" >/dev/null 2>&1; then
+			missing+=("$dep")
+		fi
+	done
+
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		die "Missing required dependencies: ${missing[*]}"
 	fi
 }
 
-# Live tail logs
-live_logs() {
-	tmpfile=$(mktemp /tmp/k8slog_"$(date +'%Y%m%d-%H%M%S')".log) # Create a temporary file to store the logs
+# Open file/directory with appropriate application
+open_path() {
+	local path="$1"
 
-	kubectl logs --follow --tail $TAIL_LINES svc/$SVCNAME -n $NAMESPACE >"$tmpfile" &
-	pid=$! # Run kubectl logs in the background into the temporary file
-	# trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
-	trap 'echo "Signal caught, cleaning up..."; kill "$pid" 2>/dev/null; rm -f "$tmpfile"' INT TERM EXIT
+	if command -v open >/dev/null; then
+		open "$path"
+	elif command -v xdg-open >/dev/null; then
+		xdg-open "$path"
+	else
+		log_info "Path: $path"
+	fi
+}
 
-	viewer=$(printf "plain\nlnav\nquit" | fzfx "Choose a viewer") # Ask for a viewer
+# ------------- Viewer Functions -------------
+get_viewer_choice() {
+	local viewers="$1"
+	printf '%b\n' "$viewers" | fzfx "Choose a viewer"
+}
+
+open_with_viewer() {
+	local file="$1"
+	local viewer="$2"
+
 	case "$viewer" in
 	plain)
-		tail -f "$tmpfile" | cat
+		if command -v bat >/dev/null; then
+			bat --style="plain" "$file"
+		else
+			cat "$file"
+		fi
+		;;
+	bat)
+		if command -v bat >/dev/null; then
+			bat "$file"
+		else
+			log_warn "bat not found, using cat"
+			cat "$file"
+		fi
+		;;
+	nvim)
+		if command -v nvim >/dev/null; then
+			nvim "$file"
+		else
+			log_warn "nvim not found, using default viewer"
+			open_with_viewer "$file" "plain"
+		fi
 		;;
 	lnav)
-		lnav "$tmpfile"
+		if command -v lnav >/dev/null; then
+			lnav "$file"
+		else
+			log_warn "lnav not found, using default viewer"
+			open_with_viewer "$file" "plain"
+		fi
 		;;
 	quit)
 		exit 0
 		;;
 	*)
-		echo "Invalid choice"
-		exit 1
+		die "Invalid viewer choice: $viewer"
 		;;
 	esac
 }
 
-# View logs without downloading
-view_log() {
-	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-	cmd="kubectl logs svc/$SVCNAME -n $NAMESPACE"                # Build the command to run
+# ------------- Kubectl Helper Functions -------------
+get_kubectl_logs_cmd() {
+	local service="$1"
+	local namespace="$2"
+	local cmd="kubectl logs svc/$service -n $namespace"
 
 	if [[ $TAIL_LINES -gt 0 ]]; then
-		cmd="$cmd --tail $TAIL_LINES" # Add tail lines if specified
+		cmd="$cmd --tail $TAIL_LINES"
 	fi
 
-	case "$viewer" in
-	plain)
-		eval "$cmd" | cat
-		;;
-	bat)
-		eval "$cmd" | bat --style="plain"
-		;;
-	quit)
-		exit 0
-		;;
-	*)
-		echo "Invalid choice"
-		exit 1
-		;;
-	esac
+	echo "$cmd"
 }
 
-# Choose a log file and open it in a viewer
-choose_log() {
-	# LOG_DIR=$HOME/Documents/inbox/k8s-logs
-	source $HOME/zsh-tools/envs/kflog/.env
+execute_kubectl_logs() {
+	local service="$1"
+	local namespace="$2"
+	local output_file="${3:-}"
 
-	FILENAME=$(ls "$LOG_DIR" | fzfx "Choose a log file")
+	local cmd
+	cmd=$(get_kubectl_logs_cmd "$service" "$namespace")
 
-	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-	case "$viewer" in
-	plain)
-		bat --style="plain" "$LOG_DIR/$FILENAME"
-		;;
-	bat)
-		bat "$LOG_DIR/$FILENAME"
-		;;
-	quit)
-		exit 0
-		;;
-	*)
-		echo "Invalid choice"
-		exit 1
-		;;
-	esac
-}
-# -------------------------------------
-
-# --------------- main ----------------
-# Check floag and set variables
-while [[ $# -gt 0 ]]; do
-	case "$1" in
-	-h | --help)
-		echo "Usage: $(basename "$0") [options]"
-		echo "Default: If no options are specified, the logs will be downloaded"
-		echo "Options:"
-		echo "  -h, --help              Show this help message and exit"
-		echo "  -f, --follow            Follow the logs live"
-		echo "  -v, --view              View the logs"
-		echo "  -t, --tail              Tail the logs"
-		echo "  -cf, --choose-file      Choose desire log file"
-		echo "                          If not specified in live tail mode,"
-		echo "                          the default tail lines is $DEFAULT_TAIL_LINES"
-		echo "                          You can specify a number of lines to tail"
-		echo "                          e.g. $(basename "$0") -t 100"
-		exit 0
-		;;
-	-f | --follow)
-		IS_LIVE_TAIL=true
-
-		if ! [[ -n $2 ]]; then
-			TAIL_LINES=$DEFAULT_TAIL_LINES
+	if [[ -n "$output_file" ]]; then
+		if ! eval "$cmd" >"$output_file" 2>/dev/null; then
+			log_warn "Could not get logs for service $service"
+			echo "No logs available or service has no pods" >"$output_file"
+			return 1
 		fi
-
-		shift
-		;;
-	-t | --tail)
-		if ! [[ -n $2 && "$2" =~ ^[0-9]+$ ]]; then
-			echo "Error: --tail requires a number value." >&2
-			exit 1
-		fi
-
-		TAIL_LINES=$2
-		shift 2
-		;;
-	-v | --view)
-		IS_VIEW_LOG=true
-		shift
-		;;
-	-cf | --choose-file)
-		IS_CHOOSE_FILE=true
-		shift
-		;;
-	*)
-		echo "Unknown option $1"
-		break
-		;;
-	esac
-done
-
-if [[ $IS_CHOOSE_FILE == true ]]; then
-	choose_log
-else
-	kubectx "$(kubectx | fzfx "Choose a cluster")"              # Choose cluster
-	SVCINFO=$(kubectl get service -A | fzfx "Choose a service") # Choose service
-
-	IFS=' ' read -r -a SVC <<<"$SVCINFO" # Split the pod info into an array
-
-	NAMESPACE=${SVC[0]}
-	SVCNAME=${SVC[1]}
-
-	echo "Choose service: $SVCNAME, namespace: $NAMESPACE"
-
-	if [[ $IS_LIVE_TAIL == true ]]; then
-		live_logs
-	elif [[ $IS_VIEW_LOG == true ]]; then
-		view_log
 	else
-		download_logs
+		eval "$cmd"
 	fi
+}
+
+# ------------- Core Functions -------------
+download_single_service_logs() {
+	load_config
+
+	local timestamp
+	timestamp=$(date +%Y%m%d-%H%M%S)
+	local filename="$SVCNAME-$timestamp.log"
+	local filepath="$LOG_DIR/$filename"
+
+	log_info "Saving logs to $filepath"
+
+	if ! execute_kubectl_logs "$SVCNAME" "$NAMESPACE" "$filepath"; then
+		log_warn "Failed to download complete logs for $SVCNAME"
+	fi
+
+	log_info "Downloaded logs to $filepath"
+
+	local choice
+	read -p "Open logs in viewer? [Y/n] " choice
+
+	if [[ $choice =~ ^[Nn]$ ]]; then
+		return 0
+	fi
+
+	local viewer
+	viewer=$(get_viewer_choice "plain\nbat\nlnav\nquit")
+	open_with_viewer "$filepath" "$viewer"
+}
+
+download_namespace_logs() {
+	load_config
+
+	log_info "Getting all services in namespace: $TARGET_NAMESPACE"
+
+	local services
+	if ! services=$(kubectl get svc -n "$TARGET_NAMESPACE" --no-headers -o custom-columns=":metadata.name" 2>/dev/null); then
+		die "Failed to get services from namespace: $TARGET_NAMESPACE"
+	fi
+
+	if [[ -z "$services" ]]; then
+		die "No services found in namespace: $TARGET_NAMESPACE"
+	fi
+
+	local timestamp
+	timestamp=$(date +%Y%m%d-%H%M%S)
+	local namespace_dir="$LOG_DIR/namespace-$TARGET_NAMESPACE-$timestamp"
+
+	mkdir -p "$namespace_dir" || die "Failed to create directory: $namespace_dir"
+
+	log_info "Downloading logs from all services in namespace: $TARGET_NAMESPACE"
+	log_info "Logs will be saved to: $namespace_dir"
+
+	local service_count=0
+	local success_count=0
+
+	while IFS= read -r service; do
+		if [[ -n "$service" ]]; then
+			((service_count++))
+			log_info "Downloading logs for service: $service"
+
+			local filename="$service-$timestamp.log"
+			local filepath="$namespace_dir/$filename"
+
+			if execute_kubectl_logs "$service" "$TARGET_NAMESPACE" "$filepath"; then
+				((success_count++))
+			fi
+		fi
+	done <<<"$services"
+
+	log_info "Downloaded logs from $success_count/$service_count services to: $namespace_dir"
+
+	local choice
+	read -p "Open logs directory? [Y/n] " choice
+	if [[ ! $choice =~ ^[Nn]$ ]]; then
+		open_path "$namespace_dir"
+	fi
+}
+
+live_tail_logs() {
+	if [[ $TAIL_LINES -eq 0 ]]; then
+		TAIL_LINES=$DEFAULT_TAIL_LINES
+	fi
+
+	local tmpfile
+	tmpfile=$(mktemp "/tmp/${TEMP_PREFIX}.log")
+
+	# Start kubectl logs in background
+	kubectl logs --follow --tail "$TAIL_LINES" "svc/$SVCNAME" -n "$NAMESPACE" >"$tmpfile" &
+	local kubectl_pid=$!
+
+	# Setup cleanup trap
+	trap 'log_info "Cleaning up..."; kill "$kubectl_pid" 2>/dev/null || true; rm -f "$tmpfile"' INT TERM EXIT
+
+	# Wait a moment for initial logs
+	sleep 2
+
+	local viewer
+	viewer=$(get_viewer_choice "plain\nlnav\nquit")
+
+	case "$viewer" in
+	plain)
+		tail -f "$tmpfile"
+		;;
+	lnav)
+		if command -v lnav >/dev/null; then
+			lnav "$tmpfile"
+		else
+			log_warn "lnav not found, using tail"
+			tail -f "$tmpfile"
+		fi
+		;;
+	quit)
+		exit 0
+		;;
+	*)
+		die "Invalid viewer choice: $viewer"
+		;;
+	esac
+}
+
+view_logs_directly() {
+	local viewer
+	viewer=$(get_viewer_choice "plain\nbat\nquit")
+
+	case "$viewer" in
+	plain)
+		execute_kubectl_logs "$SVCNAME" "$NAMESPACE" | cat
+		;;
+	bat)
+		if command -v bat >/dev/null; then
+			execute_kubectl_logs "$SVCNAME" "$NAMESPACE" | bat --style="plain"
+		else
+			log_warn "bat not found, using cat"
+			execute_kubectl_logs "$SVCNAME" "$NAMESPACE" | cat
+		fi
+		;;
+	quit)
+		exit 0
+		;;
+	*)
+		die "Invalid viewer choice: $viewer"
+		;;
+	esac
+}
+
+choose_existing_log() {
+	load_config
+
+	if [[ ! -d "$LOG_DIR" ]] || [[ -z "$(ls -A "$LOG_DIR" 2>/dev/null)" ]]; then
+		die "No log files found in $LOG_DIR"
+	fi
+
+	local filename
+	filename=$(ls "$LOG_DIR" | fzfx "Choose a log file")
+
+	local viewer
+	viewer=$(get_viewer_choice "plain\nbat\nquit")
+	open_with_viewer "$LOG_DIR/$filename" "$viewer"
+}
+
+# ------------- Cluster and Service Selection -------------
+select_cluster() {
+	local cluster
+	cluster=$(kubectx | fzfx "Choose a cluster")
+	kubectx "$cluster" >/dev/null || die "Failed to switch to cluster: $cluster"
+	log_info "Switched to cluster: $cluster"
+}
+
+select_service() {
+	local svc_info
+	svc_info=$(kubectl get service -A | fzfx "Choose a service")
+
+	# Parse service info
+	local -a svc_array
+	IFS=' ' read -r -a svc_array <<<"$svc_info"
+
+	if [[ ${#svc_array[@]} -lt 2 ]]; then
+		die "Invalid service selection"
+	fi
+
+	NAMESPACE="${svc_array[0]}"
+	SVCNAME="${svc_array[1]}"
+
+	log_info "Selected service: $SVCNAME, namespace: $NAMESPACE"
+}
+
+# ------------- Help and Argument Parsing -------------
+show_help() {
+	cat <<EOF
+Usage: $SCRIPT_NAME [options]
+
+A tool for managing Kubernetes service logs with various viewing and downloading options.
+
+Default behavior: Download logs from a selected service
+
+Options:
+  -h, --help              Show this help message and exit
+  -f, --follow            Follow the logs live (tail -f behavior)
+  -v, --view              View the logs without downloading
+  -t, --tail <lines>      Specify number of lines to tail (default: $DEFAULT_TAIL_LINES for live mode)
+  -cf, --choose-file      Choose and view an existing log file
+  -ns, --namespace <ns>   Download logs from all services in specified namespace
+
+Examples:
+  $SCRIPT_NAME                    # Interactive service selection and download
+  $SCRIPT_NAME -f                 # Live tail logs from selected service
+  $SCRIPT_NAME -v                 # View logs without downloading
+  $SCRIPT_NAME -t 100             # Download last 100 lines
+  $SCRIPT_NAME -ns production     # Download logs from all services in 'production' namespace
+  $SCRIPT_NAME -cf                # Choose from existing log files
+
+Dependencies: kubectl, kubectx, fzf
+EOF
+}
+
+parse_arguments() {
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		-h | --help)
+			show_help
+			exit 0
+			;;
+		-f | --follow)
+			IS_LIVE_TAIL=true
+			shift
+			;;
+		-t | --tail)
+			if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+				die "--tail requires a positive number"
+			fi
+			TAIL_LINES="$2"
+			shift 2
+			;;
+		-v | --view)
+			IS_VIEW_LOG=true
+			shift
+			;;
+		-cf | --choose-file)
+			IS_CHOOSE_FILE=true
+			shift
+			;;
+		-ns | --namespace)
+			if [[ -z "${2:-}" ]]; then
+				die "--namespace requires a namespace name"
+			fi
+			IS_NAMESPACE_LOGS=true
+			TARGET_NAMESPACE="$2"
+			shift 2
+			;;
+		-*)
+			die "Unknown option: $1"
+			;;
+		*)
+			die "Unexpected argument: $1"
+			;;
+		esac
+	done
+}
+
+# ------------- Main Function -------------
+main() {
+	parse_arguments "$@"
+	check_dependencies
+
+	# Handle special cases first
+	if [[ "$IS_CHOOSE_FILE" == true ]]; then
+		choose_existing_log
+		return 0
+	fi
+
+	if [[ "$IS_NAMESPACE_LOGS" == true ]]; then
+		select_cluster
+		download_namespace_logs
+		return 0
+	fi
+
+	# Standard workflow: select cluster and service
+	select_cluster
+	select_service
+
+	# Execute based on selected mode
+	if [[ "$IS_LIVE_TAIL" == true ]]; then
+		live_tail_logs
+	elif [[ "$IS_VIEW_LOG" == true ]]; then
+		view_logs_directly
+	else
+		download_single_service_logs
+	fi
+}
+
+# ------------- Script Entry Point -------------
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
 fi
