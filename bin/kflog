@@ -89,7 +89,9 @@ check_dependencies() {
 open_path() {
 	local path="$1"
 
-	if command -v open >/dev/null; then
+	if command -v yazi >/dev/null; then
+		yazi "$path"
+	elif command -v open >/dev/null; then
 		open "$path"
 	elif command -v xdg-open >/dev/null; then
 		xdg-open "$path"
@@ -149,6 +151,35 @@ open_with_viewer() {
 	esac
 }
 
+# ------------- Cleanup Functions -------------
+cleanup_logs() {
+	load_config
+
+	if [[ ! -d "$LOG_DIR" ]]; then
+		die "Log directory does not exist: $LOG_DIR"
+	fi
+
+	if ! command -v fd >/dev/null 2>&1; then
+		log_warn "fd not found, falling back to find"
+		find "$LOG_DIR" -mindepth 1 -delete
+		return 0
+	fi
+
+	log_info "Files and directories to be deleted:"
+	fd . "$LOG_DIR" --max-depth 1 --color always
+
+	local choice
+	read -p "Delete all logs in $LOG_DIR? [y/N] " choice
+
+	if [[ $choice =~ ^[Yy]$ ]]; then
+		log_info "Cleaning up log directory: $LOG_DIR"
+		fd . "$LOG_DIR" --max-depth 1 --exec-batch rm -rf
+		log_info "Log directory cleaned"
+	else
+		log_info "Cleanup cancelled"
+	fi
+}
+
 # ------------- Kubectl Helper Functions -------------
 get_kubectl_logs_cmd() {
 	local service="$1"
@@ -173,7 +204,7 @@ execute_kubectl_logs() {
 	if [[ -n "$output_file" ]]; then
 		if ! eval "$cmd" >"$output_file" 2>/dev/null; then
 			log_warn "Could not get logs for service $service"
-			echo "No logs available or service has no pods" >"$output_file"
+			# echo "No logs available or service has no pods" >"$output_file"
 			return 1
 		fi
 	else
@@ -212,6 +243,8 @@ download_single_service_logs() {
 
 download_namespace_logs() {
 	load_config
+
+	select_namespace
 
 	log_info "Getting all services in namespace: $TARGET_NAMESPACE"
 
@@ -349,6 +382,22 @@ select_cluster() {
 	log_info "Switched to cluster: $cluster"
 }
 
+select_namespace() {
+	local namespace_info
+	namespace_info=$(kubectl get namespaces | fzfx "Choose a namespace")
+
+	local -a namespace_array
+	IFS=' ' read -r -a namespace_array <<<"$namespace_info"
+
+	if [[ ${#namespace_array[@]} -lt 1 ]]; then
+		die "Invalid namespace selection"
+	fi
+
+	TARGET_NAMESPACE="${namespace_array[0]}"
+
+	log_info "Selected namespace: $TARGET_NAMESPACE"
+}
+
 select_service() {
 	local svc_info
 	svc_info=$(kubectl get service -A | fzfx "Choose a service")
@@ -423,12 +472,12 @@ parse_arguments() {
 			shift
 			;;
 		-ns | --namespace)
-			if [[ -z "${2:-}" ]]; then
-				die "--namespace requires a namespace name"
-			fi
 			IS_NAMESPACE_LOGS=true
-			TARGET_NAMESPACE="$2"
-			shift 2
+			shift
+			;;
+		--cleanup)
+			cleanup_logs
+			exit 0
 			;;
 		-*)
 			die "Unknown option: $1"
