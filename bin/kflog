@@ -14,21 +14,21 @@ fzfx() {
 	fzf --header="$1" --header-border=double
 }
 
-# Downloads logs from a pod, saves them to a file, and opens the file in a viewer
+# Downloads logs from a service, saves them to a file, and opens the file in a viewer
 download_logs() {
 	# LOG_DIR=$HOME/Documents/inbox/k8s-logs
 	source $HOME/zsh-tools/envs/kflog/.env
 
 	mkdir -p $LOG_DIR
-	FILENAME="$PODNAME-$(date +%Y%m%d-%H%M%S).log"
+	FILENAME="$SVCNAME-$(date +%Y%m%d-%H%M%S).log"
 
 	echo "Saving logs to $LOG_DIR/$FILENAME"
 
 	# Download logs from the pod base on the tail lines
 	if [[ $TAIL_LINES -gt 0 ]]; then
-		kubectl logs $PODNAME -n $NAMESPACE --tail $TAIL_LINES >"$LOG_DIR/$FILENAME"
+		kubectl logs svc/$SVCNAME -n $NAMESPACE --tail $TAIL_LINES >"$LOG_DIR/$FILENAME"
 	else
-		kubectl logs $PODNAME -n $NAMESPACE >"$LOG_DIR/$FILENAME"
+		kubectl logs svc/$SVCNAME -n $NAMESPACE >"$LOG_DIR/$FILENAME"
 	fi
 
 	echo "Downloaded logs to $LOG_DIR/$FILENAME"
@@ -64,7 +64,7 @@ download_logs() {
 live_logs() {
 	tmpfile=$(mktemp /tmp/k8slog_"$(date +'%Y%m%d-%H%M%S')".log) # Create a temporary file to store the logs
 
-	kubectl logs --follow --tail $TAIL_LINES $PODNAME -n $NAMESPACE >"$tmpfile" &
+	kubectl logs --follow --tail $TAIL_LINES svc/$SVCNAME -n $NAMESPACE >"$tmpfile" &
 	pid=$! # Run kubectl logs in the background into the temporary file
 	# trap "kill $pid 2>/dev/null; rm -f $tmpfile" EXIT # Clean up
 	trap 'echo "Signal caught, cleaning up..."; kill "$pid" 2>/dev/null; rm -f "$tmpfile"' INT TERM EXIT
@@ -90,7 +90,7 @@ live_logs() {
 # View logs without downloading
 view_log() {
 	viewer=$(printf "plain\nbat\nquit" | fzfx "Choose a viewer") # Ask for a viewer
-	cmd="kubectl logs $PODNAME -n $NAMESPACE"                    # Build the command to run
+	cmd="kubectl logs svc/$SVCNAME -n $NAMESPACE"                # Build the command to run
 
 	if [[ $TAIL_LINES -gt 0 ]]; then
 		cmd="$cmd --tail $TAIL_LINES" # Add tail lines if specified
@@ -194,15 +194,15 @@ done
 if [[ $IS_CHOOSE_FILE == true ]]; then
 	choose_log
 else
-	kubectx "$(kubectx | fzfx "Choose a cluster")"       # Choose cluster
-	PODINFO=$(kubectl get pods -A | fzfx "Choose a pod") # Choose pod
+	kubectx "$(kubectx | fzfx "Choose a cluster")"              # Choose cluster
+	SVCINFO=$(kubectl get service -A | fzfx "Choose a service") # Choose service
 
-	IFS=' ' read -r -a POD <<<"$PODINFO" # Split the pod info into an array
+	IFS=' ' read -r -a SVC <<<"$SVCINFO" # Split the pod info into an array
 
-	NAMESPACE=${POD[0]}
-	PODNAME=${POD[1]}
+	NAMESPACE=${SVC[0]}
+	SVCNAME=${SVC[1]}
 
-	echo "Choose pod: $PODNAME, namespace: $NAMESPACE"
+	echo "Choose service: $SVCNAME, namespace: $NAMESPACE"
 
 	if [[ $IS_LIVE_TAIL == true ]]; then
 		live_logs
