@@ -1,0 +1,72 @@
+#!/bin/bash
+# utils function
+log_info() {
+	echo "[INFO] $*" >&2
+}
+
+log_warn() {
+	echo "[WARN] $*" >&2
+}
+
+log_error() {
+	echo "[ERROR] $*" >&2
+}
+
+die() {
+	log_error "$*"
+	exit 1
+}
+
+# Enhanced fzf wrapper with better error handling
+fzfx() {
+	local header="$1"
+	local input
+
+	if ! input=$(fzf --header="$header" --header-border=double); then
+		die "Selection cancelled or no input provided"
+	fi
+
+	if [[ -z "$input" ]]; then
+		die "Empty selection"
+	fi
+
+	echo "$input"
+}
+
+# ------------- Cluster and Service Selection -------------
+select_cluster() {
+	local cluster
+	cluster=$(kubectx | fzfx "Choose a cluster")
+	kubectx "$cluster" >/dev/null || die "Failed to switch to cluster: $cluster"
+	log_info "Switched to cluster: $cluster"
+}
+
+# Validate kubectl and kubectx availability
+check_dependencies() {
+	local deps=("kubectx" "fzf" "k9s")
+	local missing=()
+
+	for dep in "${deps[@]}"; do
+		if ! command -v "$dep" >/dev/null 2>&1; then
+			missing+=("$dep")
+		fi
+	done
+
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		die "Missing required dependencies: ${missing[*]}"
+	fi
+}
+
+# ------------- Main Function -------------
+main() {
+	check_dependencies
+	select_cluster
+
+	log_info "Executing k9s"
+	k9s
+}
+
+# ------------- Script Entry Point -------------
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi
